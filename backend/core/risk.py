@@ -59,11 +59,17 @@ def classify(score, config=None):
 
 
 def type_group_for(name, config=None):
-    """Return (group_key, TypeGroup) for a class name."""
+    """
+    Return (group_key, TypeGroup) for a class name.
+
+    The name is normalised, then mapped through ``class_aliases`` so that
+    labels such as "Bike" or "pedestrian" score as their COCO class.
+    """
     cfg = config or DEFAULT_CONFIG.scoring
     key = normalise_name(name)
     if not key:
         return "unknown", cfg.unknown_group
+    key = cfg.class_aliases.get(key, key)
     for group_key, group in cfg.type_groups.items():
         if key in group.classes:
             return group_key, group

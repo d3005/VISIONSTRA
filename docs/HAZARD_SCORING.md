@@ -58,7 +58,23 @@ The raw sum is clamped to **0–100** and rounded to one decimal. Every result c
 
 ### 2.1 Object type
 
-Class names are matched after trimming and lower-casing.
+Class names are matched after **normalising** them: trimmed, lower-cased, underscores and hyphens read as spaces, repeated spaces collapsed. `Traffic_Light`, `traffic-light` and `traffic light` are the same class.
+
+The normalised name is then passed through **class aliases** (`scoring.class_aliases`) before the group lookup, so labels that are not COCO names still score as the class they mean. Without this, a label such as `Bike` fell through to *Any other class* and a bike 2 m ahead scored LOW (21) instead of HIGH (84).
+
+| Alias(es) | Scores as |
+|---|---|
+| pedestrian, people, human, man, woman, child, kid, walker | person |
+| cycle, pushbike, cyclist, bicyclist | bicycle |
+| bike, motorbike, scooter, scooty, moped, two wheeler, motorcyclist | motorcycle |
+| auto, auto rickshaw, autorickshaw, tuk tuk, taxi, cab, van, suv, jeep | car |
+| lorry, pickup truck, tractor | truck |
+| minibus, coach | bus |
+| cattle, buffalo, bull, ox | cow |
+| puppy, stray dog | dog |
+
+When a word is ambiguous the **riskier** reading wins: in Indian English *bike* usually means a motorcycle, and a motorcycle also outscores a bicycle, so `bike` maps to `motorcycle`. Change it in the config if your detector means a bicycle. The reason text keeps the label the detector used ("Bike, 2 m, center. It is a vehicle; …").
+
 
 | Group | Classes | Weight | Distance factor | Why |
 |---|---|---|---|---|
@@ -287,7 +303,7 @@ VISIONSTRA_HAZARD_CONFIG=my_config.json python "detection /app.py"
 }
 ```
 
-The config is validated at start-up. Unknown keys and contradictions raise a clear `ValueError`, for example: a MEDIUM cutoff above HIGH, distance points that grow with distance, a class in two groups, or approaching worth less than receding.
+The config is validated at start-up. Unknown keys and contradictions raise a clear `ValueError`, for example: a MEDIUM cutoff above HIGH, distance points that grow with distance, a class in two groups, or approaching worth less than receding, or a class alias that points at no known class or shadows a real class name.
 
 | If you want… | Change |
 |---|---|
@@ -300,6 +316,7 @@ The config is validated at start-up. Unknown keys and contradictions raise a cle
 | Quieter voice | raise `alerts.cooldown_s` / `alerts.same_object_repeat_s`, or set `alerts.speak_priorities` to `["HIGH"]` |
 | Less flicker between priorities | raise `stability.downgrade_hold_s` |
 | Accurate distances on your device | `camera.focal_length_px` (section 5) |
+| A model that uses its own label words | add to `scoring.class_aliases`, e.g. `{"e rickshaw": "car"}`; `null` removes a default alias |
 
 ---
 
@@ -342,6 +359,7 @@ These tests need no camera, model weights or network. `test_api.py` runs `POST /
 | `test_pipeline.py` | multi-frame behaviour, escalation of an approaching car, priority hold and flicker, reset |
 | `test_alerts.py` | every speaking rule (first, escalation, new HIGH object, cooldown, same-object repeat, busy, jitter), sentence wording |
 | `test_distance.py` | per-class distances, turned objects, cut-off boxes, calibration |
+| `test_aliases.py` | label normalisation (`_`, `-`, case, spacing); every default alias scores exactly like its target; the task example written as *Pedestrian / Car / Bike* in every position; adding, overriding and removing aliases; invalid aliases rejected |
 | `test_config.py` | overrides, file and env loading, the example file, 14 kinds of invalid config |
 | `test_api.py` | `/detect` ranks the task scene, announces once per stream, keeps streams separate, rejects bad requests |
 
@@ -351,7 +369,7 @@ These tests need no camera, model weights or network. `test_api.py` runs `POST /
 
 - The camera faces the direction of travel at roughly chest height and the image is not mirrored, so "left" in the image is the user's left.
 - **Left / Center / Right** are thirds of the image (where the object *is*, not where it is heading).
-- Class names are YOLOv8 COCO names. The reference sizes are typical adult / passenger-vehicle sizes.
+- Class names are YOLOv8 COCO names, or labels mapped onto them by `scoring.class_aliases`. The reference sizes are typical adult / passenger-vehicle sizes.
 - Distances are monocular estimates from box size. They are only as good as the reference size and the focal length.
 - The voice can say only one hazard at a time. Everything else stays visible on screen.
 
@@ -366,3 +384,4 @@ These tests need no camera, model weights or network. `test_api.py` runs `POST /
 - **Low-confidence and odd classes are not hidden.** A bottle, or a 25 %-confidence detection, stays listed but LOW. Missed detections (false negatives) are not handled by scoring at all.
 - The live camera app serves **one camera** and one voice. The `/detect` API keeps separate state for up to 16 browser tabs.
 - **Face identity** does not affect risk.
+- **Aliases are an exact word list**, not language understanding. A label that is neither a COCO class nor a listed alias (a misspelling, another language, `"e-bike"`) still scores as *Any other class* until it is added to the config.

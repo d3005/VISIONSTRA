@@ -20,6 +20,8 @@ import json
 import os
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 
+from .fields import normalise_name
+
 PRIORITY_LEVELS = ("LOW", "MEDIUM", "HIGH")
 POSITIONS = ("left", "center", "right")
 MOVEMENTS = ("approaching", "stationary", "receding")
@@ -63,9 +65,36 @@ def _default_type_groups():
     }
 
 
+def _default_class_aliases():
+    """
+    Everyday or other-model labels -> the COCO class they should score as.
+
+    When a word is ambiguous the riskier class wins: in Indian English
+    "bike" usually means a motorcycle, and a motorcycle also scores higher
+    than a bicycle, so "bike" maps to "motorcycle".
+    """
+    groups = {
+        "person": ("pedestrian", "people", "human", "man", "woman",
+                   "child", "kid", "walker"),
+        "bicycle": ("cycle", "pushbike", "cyclist", "bicyclist"),
+        "motorcycle": ("bike", "motorbike", "motor bike", "scooter",
+                       "scooty", "moped", "two wheeler", "motorcyclist"),
+        "car": ("auto", "auto rickshaw", "autorickshaw", "tuk tuk",
+                "taxi", "cab", "van", "suv", "jeep"),
+        "truck": ("lorry", "pickup truck", "tractor"),
+        "bus": ("minibus", "coach"),
+        "cow": ("cattle", "buffalo", "bull", "ox"),
+        "dog": ("puppy", "stray dog"),
+    }
+    return {alias: target for target, aliases in groups.items() for alias in aliases}
+
+
 @dataclass(frozen=True)
 class ScoringConfig:
     type_groups: dict = field(default_factory=_default_type_groups)
+    # Labels that are not COCO class names but mean one ("bike", "pedestrian").
+    # Looked up after normalise_name; a target must be a class in a group.
+    class_aliases: dict = field(default_factory=_default_class_aliases)
     # Any non-blank class name that is not in a group above (bottle, cup, ...).
     other_group: TypeGroup = TypeGroup(4, 0.25, "a low-risk object")
     # Blank or missing class name: the detector saw *something*.
@@ -215,6 +244,15 @@ def _validate(cfg):
         if group.distance_factor < 0:
             problems.append(f"type group '{key}' has a negative distance_factor")
 
+    for alias, target in s.class_aliases.items():
+        if not alias:
+            problems.append("scoring.class_aliases has a blank alias")
+        elif alias in seen:
+            problems.append(f"class alias '{alias}' is already a class in '{seen[alias]}'")
+        if target not in seen:
+            problems.append(f"class alias '{alias}' points at '{target}', "
+                            "which is not a class in any type group")
+
     for key in s.position_points:
         if key not in POSITIONS:
             problems.append(f"scoring.position_points has unknown position '{key}'")
@@ -283,7 +321,7 @@ def _merge_type_group(base, overrides, where):
             raise ValueError(f"Unknown setting {where}.{key}")
     values = dict(overrides)
     if "classes" in values:
-        values["classes"] = tuple(str(c).strip().lower() for c in values["classes"])
+        values["classes"] = tuple(normalise_name(str(c)) for c in values["classes"])
     if base is None:
         missing = known - set(values)
         if missing:
@@ -299,6 +337,17 @@ def _merge_value(current, new, where):
         merged = dict(current)
         for key, overrides in new.items():
             merged[key] = _merge_type_group(current.get(key), overrides, f"{where}.{key}")
+        return merged
+    if where.endswith("class_aliases"):
+        if not isinstance(new, dict):
+            raise ValueError(f"{where} must be an object")
+        merged = dict(current)
+        for alias, target in new.items():
+            alias = normalise_name(str(alias))
+            if target is None:              # null removes a default alias
+                merged.pop(alias, None)
+            else:
+                merged[alias] = normalise_name(str(target))
         return merged
     if where.endswith("distance_bands"):
         return tuple(

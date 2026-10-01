@@ -48,9 +48,17 @@ def clean_name(name):
 
 
 def normalise_name(name):
-    """Lower-case class name used for table lookups ('' when blank)."""
+    """
+    Class name used for table lookups ('' when blank).
+
+    Lower-cased, with underscores and hyphens read as spaces and runs of
+    whitespace collapsed, so "Traffic_Light", "traffic-light" and
+    "traffic  light" all become "traffic light".
+    """
     name = clean_name(name)
-    return name.lower() if name else ""
+    if not name:
+        return ""
+    return " ".join(name.lower().replace("_", " ").replace("-", " ").split())
 
 
 def normalise_position(direction):
